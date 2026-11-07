@@ -1,0 +1,10 @@
+{
+  "name": "calc-lib",
+  "version": "1.2.0",
+  "description": "Money helpers used by the checkout service",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "test": "node --test --test-reporter=tap"
+  }
+}

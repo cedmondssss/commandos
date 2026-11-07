@@ -1,0 +1,32 @@
+# dependencies / builds
+node_modules/
+out/
+dist/
+release/
+.build/
+.swiftpm/
+*.tsbuildinfo
+apps/desktop/resources/bin/
+
+# secrets — never commit credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.p12
+
+# generated fixtures and local data
+fixtures/.generated/
+.commandos-data/
+test-results/
+playwright-report/
+*.log
+.DS_Store
+.vercel/
+bench/results/20*.json
+bench/results/.last-run.log
+verification/safety-lab/safety_*.json
+
+# Local run evidence and benchmark outputs
+verification/
+bench/results/

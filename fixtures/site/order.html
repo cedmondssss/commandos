@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>New purchase request — Northwind Supply Co.</title><link rel="stylesheet" href="styles.css"></head>
+<body>
+<header><strong>Northwind Supply Co.</strong><a href="catalog.html">Catalog</a><a href="order.html">New purchase request</a></header>
+<main><div class="card">
+<h1>Draft purchase request <span class="badge" id="layout-badge">layout A</span></h1>
+<p class="muted">Fill the request and save it as a draft. Submitting sends it to our sales team.</p>
+<form id="purchase-request" action="submitted.html" method="get">
+  <div class="row"><label for="company">Company name</label><input id="company" name="company" required></div>
+  <div class="row"><label for="email">Contact email</label><input id="email" name="email" type="email" required></div>
+  <div class="row"><label for="sku">Product</label>
+    <select id="sku" name="sku" required>
+      <option value="">Choose a product…</option>
+      <option value="NW-1042">NW-1042 — Ergonomic desk lamp</option>
+      <option value="NW-2210">NW-2210 — Recycled notebook (A5, 10-pack)</option>
+      <option value="NW-3307">NW-3307 — Noise-dampening desk panel</option>
+      <option value="NW-4120">NW-4120 — USB-C 6-port charging hub</option>
+      <option value="NW-5003">NW-5003 — Archival storage box (set of 4)</option>
+      <option value="NW-6188">NW-6188 — Standing mat, anti-fatigue</option>
+    </select></div>
+  <div class="row"><label for="quantity">Quantity</label><input id="quantity" name="quantity" type="number" min="1" required></div>
+  <div class="row"><label for="needed-by">Needed by</label><input id="needed-by" name="needed_by" type="date"></div>
+  <div class="row"><label for="notes">Notes</label><textarea id="notes" name="notes" rows="3"></textarea></div>
+  <div class="actions">
+    <button type="button" id="save-draft">Save draft</button>
+    <button type="submit" class="primary">Submit request</button>
+  </div>
+  <div id="status" role="status"></div>
+</form>
+</div></main>
+<script>
+  // ?variant=b simulates a site redesign: every field id and name changes, labels stay the same.
+  // ?variant=c additionally rewords some labels, so neither selectors nor exact labels match.
+  const variant = new URLSearchParams(location.search).get('variant');
+  if (variant === 'b' || variant === 'c') {
+    const renames = { company: 'org-name', email: 'contact-email-address', sku: 'product-code', quantity: 'qty-units', 'needed-by': 'delivery-date', notes: 'comments' };
+    for (const [oldId, newId] of Object.entries(renames)) {
+      const el = document.getElementById(oldId);
+      const label = document.querySelector('label[for="' + oldId + '"]');
+      el.id = newId; el.name = newId.replace(/-/g, '_');
+      if (label) label.htmlFor = newId;
+    }
+    document.getElementById('layout-badge').textContent = variant === 'c' ? 'layout C' : 'layout B';
+  }
+  if (variant === 'c') {
+    const relabel = { 'contact-email-address': 'Work email address', 'qty-units': 'Units requested', 'org-name': 'Organization' };
+    for (const [id, text] of Object.entries(relabel)) document.querySelector('label[for="' + id + '"]').textContent = text;
+  }
+  document.getElementById('save-draft').addEventListener('click', () => {
+    const data = Object.fromEntries(new FormData(document.getElementById('purchase-request')));
+    localStorage.setItem('northwind-draft', JSON.stringify(data));
+    document.getElementById('status').textContent = 'Draft saved locally (not submitted).';
+  });
+</script>
+</body></html>

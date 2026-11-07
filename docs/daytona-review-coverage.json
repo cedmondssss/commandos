@@ -1,0 +1,104 @@
+{
+  "source": "https://www.daytona.io/docs/llms-full.txt",
+  "exportGenerated": "2026-10-12",
+  "reviewDate": "2026-10-16",
+  "bytes": 3136236,
+  "lines": 99880,
+  "words": 367128,
+  "sha256": "6649506043b44ab343690c7f30fc1ac91aec27d9e28991998cf2aec90c155f27",
+  "topLevelHeadingSections": 189,
+  "method": "Whole-file retrieval and structural indexing; section-by-section capability review, detailed core/TypeScript contract checks, cross-language API surface comparison, and CommandOS source audit. Repeated SDK examples were consolidated. This is a documentation review, not live verification of every API or account entitlement.",
+  "coverage": [
+    {
+      "area": "overview",
+      "startLine": 1,
+      "endLine": 280,
+      "sections": 2
+    },
+    {
+      "area": "authentication_and_lifecycle",
+      "startLine": 281,
+      "endLine": 4486,
+      "sections": 2
+    },
+    {
+      "area": "isolation_persistence_scale",
+      "startLine": 4487,
+      "endLine": 6647,
+      "sections": 3
+    },
+    {
+      "area": "images_pools_storage_regions",
+      "startLine": 6648,
+      "endLine": 16790,
+      "sections": 6
+    },
+    {
+      "area": "files_git_lsp_process_terminal_mcp",
+      "startLine": 16791,
+      "endLine": 23090,
+      "sections": 7
+    },
+    {
+      "area": "desktop_access_previews_events_network",
+      "startLine": 23091,
+      "endLine": 28825,
+      "sections": 11
+    },
+    {
+      "area": "integration_and_training_guides",
+      "startLine": 28826,
+      "endLine": 44342,
+      "sections": 52
+    },
+    {
+      "area": "security_telemetry_admin_troubleshooting",
+      "startLine": 44343,
+      "endLine": 48749,
+      "sections": 12
+    },
+    {
+      "area": "typescript_reference",
+      "startLine": 48750,
+      "endLine": 60176,
+      "sections": 20
+    },
+    {
+      "area": "python_sync_async_reference",
+      "startLine": 60177,
+      "endLine": 75905,
+      "sections": 28
+    },
+    {
+      "area": "ruby_reference",
+      "startLine": 75906,
+      "endLine": 81893,
+      "sections": 16
+    },
+    {
+      "area": "go_reference",
+      "startLine": 81894,
+      "endLine": 90877,
+      "sections": 8
+    },
+    {
+      "area": "java_reference",
+      "startLine": 90878,
+      "endLine": 98448,
+      "sections": 16
+    },
+    {
+      "area": "sdk_entrypoints_cli_api_reference",
+      "startLine": 98449,
+      "endLine": 99880,
+      "sections": 6
+    }
+  ],
+  "sourceQualityNotes": [
+    "The browser extraction returned a shorter cached representation; counts and line references use the freshly downloaded raw export.",
+    "The export contains a 404 heading and repeated SDK/type sections.",
+    "Project lockfile resolves @daytona/sdk 0.224.1; dependency files are not currently present for an installed-SDK inspection."
+  ],
+  "liveCloudCallsMade": false,
+  "applicationCodeChanged": false
+}

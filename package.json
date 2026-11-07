@@ -1,0 +1,39 @@
+{
+  "name": "commandos",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.15.0",
+  "engines": {
+    "node": ">=22.12"
+  },
+  "scripts": {
+    "dev": "pnpm build:helper && pnpm --filter @commandos/desktop dev",
+    "build": "pnpm build:helper && pnpm --filter @commandos/desktop build",
+    "build:helper": "bash scripts/build-helper.sh",
+    "typecheck": "pnpm -r --parallel typecheck && tsc -p tsconfig.scripts.json",
+    "test": "vitest run",
+    "test:swift": "swift test --package-path native/CommandOSHelper",
+    "test:helper": "pnpm build:helper && vitest run tests/integration",
+    "test:e2e": "pnpm build && playwright test",
+    "cmd": "tsx scripts/commandos.ts",
+    "gen:fixtures": "tsx scripts/gen-fixtures.ts",
+    "verify:providers": "tsx scripts/verify-providers.ts",
+    "bench": "tsx bench/run.ts",
+    "safety": "tsx scripts/safety.ts",
+    "demo": "tsx scripts/demo.ts",
+    "status": "vitest run --reporter=json --outputFile=verification/tests.json; pnpm --filter @commandos/desktop build >/dev/null && PLAYWRIGHT_JSON_OUTPUT_NAME=verification/e2e.json playwright test --reporter=json >/dev/null; tsx scripts/status.ts"
+  },
+  "devDependencies": {
+    "@commandos/contracts": "workspace:*",
+    "@commandos/providers": "workspace:*",
+    "@commandos/runtime": "workspace:*",
+    "@commandos/tools": "workspace:*",
+    "@playwright/test": "1.64.1",
+    "@types/node": "^24.0.0",
+    "dotenv": "^18.0.8",
+    "playwright": "1.64.1",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.4"
+  }
+}
