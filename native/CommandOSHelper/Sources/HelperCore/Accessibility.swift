@@ -270,7 +270,7 @@ public enum Accessibility {
     /// the Accessibility tree until an assistive app asks.
     public static func enableWeb(bundleId: String, on: Bool) async throws -> [String: Any] {
         try requireTrusted()
-        let pid = try await MainActor.run { try pid(forBundleId: bundleId) }
+        let pid: pid_t = try await Accessibility.pid(forBundleId: bundleId)
         let app = appElement(pid)
         let value = (on ? kCFBooleanTrue : kCFBooleanFalse) as CFTypeRef
         // Electron apps honour AXManualAccessibility; Chrome rejects it (-25205) and instead builds
@@ -286,7 +286,7 @@ public enum Accessibility {
     /// collecting static text and image descriptions. Bounded by characters and nodes, not depth.
     public static func webText(bundleId: String, maxChars: Int) async throws -> [String: Any] {
         try requireTrusted()
-        let pid = try await MainActor.run { try pid(forBundleId: bundleId) }
+        let pid: pid_t = try await Accessibility.pid(forBundleId: bundleId)
         let app = appElement(pid)
         var window = elementAttr(app, kAXFocusedWindowAttribute as String) ?? elementAttr(app, kAXMainWindowAttribute as String)
         if window == nil, let wins = attr(app, kAXWindowsAttribute as String) as? [AXUIElement] { window = wins.first }
@@ -338,7 +338,7 @@ public enum Accessibility {
 
     public static func tree(bundleId: String, maxDepth: Int, maxNodes: Int, scope: String = "application") async throws -> [String: Any] {
         try requireTrusted()
-        let pid = try await MainActor.run { try pid(forBundleId: bundleId) }
+        let pid: pid_t = try await Accessibility.pid(forBundleId: bundleId)
         var root: AXUIElement?
         var rootRef: AxRef?
         if scope == "window" {
@@ -362,7 +362,7 @@ public enum Accessibility {
 
     public static func find(bundleId: String, query: AxQuery, maxResults: Int, maxDepth: Int) async throws -> [String: Any] {
         try requireTrusted()
-        let pid = try await MainActor.run { try pid(forBundleId: bundleId) }
+        let pid: pid_t = try await Accessibility.pid(forBundleId: bundleId)
         var out: [[String: Any]] = []
         _ = walk(pid: pid, maxDepth: maxDepth, maxNodes: 20_000, includeMenus: query.role?.contains("Menu") ?? false) { el, ref, depth in
             let snap = snapshot(el)
@@ -383,7 +383,7 @@ public enum Accessibility {
               ["AXTextField", "AXTextArea"].contains(query.role ?? ""), (query.text != nil || query.identifier != nil), !value.contains("\n"), !value.contains("\r") else {
             throw HelperError("bad_params", "ax.fill only accepts single-line Chromium text fields")
         }
-        let pid = try await MainActor.run { try pid(forBundleId: bundleId) }
+        let pid: pid_t = try await Accessibility.pid(forBundleId: bundleId)
         var matches: [AXUIElement] = []
         _ = walk(pid: pid, maxDepth: 25, maxNodes: 20_000, includeMenus: false) { el, _, _ in
             let snap = snapshot(el)
@@ -437,7 +437,7 @@ public enum Accessibility {
               query.text != nil || query.identifier != nil else {
             throw HelperError("bad_params", "ax.click requires a Chromium target with a label or identifier")
         }
-        let pid = try await MainActor.run { try pid(forBundleId: bundleId) }
+        let pid: pid_t = try await Accessibility.pid(forBundleId: bundleId)
         var matches: [(AXUIElement, Snapshot)] = []
         _ = walk(pid: pid, maxDepth: 25, maxNodes: 20_000, includeMenus: false) { el, _, _ in
             let snap = snapshot(el)
