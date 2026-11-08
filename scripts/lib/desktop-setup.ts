@@ -1,12 +1,9 @@
 import { createInterface } from 'node:readline';
 import { Writable } from 'node:stream';
-import type { CredentialKey } from '@commandos/contracts';
+import { CREDENTIAL_INFO, CredentialKeySchema, type CredentialKey } from '@commandos/contracts';
 import { CredentialResolver, type SecretBackend } from '@commandos/providers';
 
-const REQUIRED = [
-  { key: 'OPENAI_API_KEY', label: 'OpenAI API key' },
-  { key: 'ELEVENLABS_API_KEY', label: 'ElevenLabs API key' },
-] as const;
+const REQUIRED: CredentialKey[] = ['OPENAI_API_KEY', 'ELEVENLABS_API_KEY'];
 
 /** Read directly from the terminal with readline's echo output discarded. Secrets
  * never become shell commands, process arguments, terminal output, or repo files. */
@@ -39,23 +36,28 @@ export async function configureDesktopCredentials(options: {
   env?: NodeJS.ProcessEnv;
   prompt: (label: string) => Promise<string>;
   write: (message: string) => void;
+  all?: boolean;
 }): Promise<CredentialKey[]> {
   const credentials = new CredentialResolver(options.backend, options.env ?? {});
   const ready: CredentialKey[] = [];
-  for (const item of REQUIRED) {
+  for (const key of options.all ? CredentialKeySchema.options : REQUIRED) {
+    const label = CREDENTIAL_INFO[key].label.replace(/\s*\(optional\)/i, '');
+    const optional = !REQUIRED.includes(key);
     // Reuse existing Keychain or private environment credentials without retyping.
-    if (await credentials.get(item.key)) {
-      options.write(`${item.label}: already configured.`);
-      ready.push(item.key);
+    if (await credentials.get(key)) {
+      options.write(`${label}: already configured.`);
+      ready.push(key);
       continue;
     }
-    const value = (await options.prompt(`${item.label} (paste, then press Return; input is hidden): `)).trim();
-    if (!value || /\s/.test(value) || value.length > 10_000) throw new Error(`${item.label} must be a non-empty key without spaces or line breaks. Setup did not finish.`);
-    await credentials.set(item.key, value);
+    const hint = optional ? 'optional; Return to skip; input is hidden' : 'paste, then press Return; input is hidden';
+    const value = (await options.prompt(`${label} (${hint}): `)).trim();
+    if (!value && optional) { options.write(`${label}: skipped.`); continue; }
+    if (!value || /\s/.test(value) || value.length > 10_000) throw new Error(`${label} must be a non-empty value without spaces or line breaks. Setup did not finish.`);
+    await credentials.set(key, value);
     // Read from the actual store, bypassing the resolver's in-memory cache.
-    if (await options.backend.get(item.key) !== value) throw new Error(`${item.label} could not be verified in Keychain. Setup did not finish.`);
-    options.write(`${item.label}: saved and verified in Keychain.`);
-    ready.push(item.key);
+    if (await options.backend.get(key) !== value) throw new Error(`${label} could not be verified in Keychain. Setup did not finish.`);
+    options.write(`${label}: saved and verified in Keychain.`);
+    ready.push(key);
   }
   return ready;
 }

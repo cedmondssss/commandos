@@ -9,6 +9,7 @@
   "scripts": {
     "dev": "pnpm build:helper && pnpm --filter @commandos/desktop dev",
     "setup:desktop": "pnpm build:helper && tsx scripts/setup-desktop.ts && COMMANDOS_OPEN_DASHBOARD=1 pnpm --filter @commandos/desktop dev",
+    "setup:all": "pnpm build:helper && tsx scripts/setup-desktop.ts --all && COMMANDOS_OPEN_DASHBOARD=1 pnpm --filter @commandos/desktop dev",
     "build": "pnpm build:helper && pnpm --filter @commandos/desktop build",
     "build:helper": "bash scripts/build-helper.sh",
     "typecheck": "pnpm -r --parallel typecheck && tsc -p tsconfig.scripts.json",

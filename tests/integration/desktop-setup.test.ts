@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { SecretBackend } from '@commandos/providers';
+import { CREDENTIAL_INFO, CredentialKeySchema } from '@commandos/contracts';
 import { configureDesktopCredentials } from '../../scripts/lib/desktop-setup';
 
 function harness(initial: Record<string, string> = {}) {
@@ -17,6 +18,27 @@ function harness(initial: Record<string, string> = {}) {
 }
 
 describe('One-time desktop credential setup', () => {
+  it('includes every integration credential and configuration value in all-integrations mode', async () => {
+    const h = harness();
+    h.prompt.mockResolvedValue('fixture-credential');
+    expect(await configureDesktopCredentials({ ...h.options, all: true })).toEqual(CredentialKeySchema.options);
+    for (const key of CredentialKeySchema.options) {
+      expect(h.values.get(key)).toBe('fixture-credential');
+      expect(h.prompt.mock.calls.some(([label]) => label.startsWith(CREDENTIAL_INFO[key].label.replace(/\s*\(optional\)/i, '')))).toBe(true);
+    }
+    expect(h.output.join('\n')).not.toContain('fixture-credential');
+  });
+
+  it('allows unused integrations to be skipped while preserving the required planning and voice keys', async () => {
+    const h = harness({ OPENAI_API_KEY: 'existing-planning', ELEVENLABS_API_KEY: 'existing-voice' });
+    h.prompt.mockResolvedValue('');
+    expect(await configureDesktopCredentials({ ...h.options, all: true })).toEqual(['OPENAI_API_KEY', 'ELEVENLABS_API_KEY']);
+    expect(h.backend.set).not.toHaveBeenCalled();
+    expect(h.prompt).toHaveBeenCalledTimes(CredentialKeySchema.options.length - 2);
+    expect(h.prompt.mock.calls.every(([label]) => label.includes('Return to skip'))).toBe(true);
+    expect(h.output.join('\n')).toContain('skipped');
+  });
+
   it('saves both keys, verifies persistent storage and keeps values out of output', async () => {
     const h = harness();
     expect(await configureDesktopCredentials(h.options)).toEqual(['OPENAI_API_KEY', 'ELEVENLABS_API_KEY']);
