@@ -39,6 +39,7 @@ export async function configureDesktopCredentials(options: {
   all?: boolean;
 }): Promise<CredentialKey[]> {
   const credentials = new CredentialResolver(options.backend, options.env ?? {});
+  const storeName = options.backend.source === 'file' ? 'private credential file' : 'Keychain';
   const ready: CredentialKey[] = [];
   for (const key of options.all ? CredentialKeySchema.options : REQUIRED) {
     const label = CREDENTIAL_INFO[key].label.replace(/\s*\(optional\)/i, '');
@@ -55,8 +56,8 @@ export async function configureDesktopCredentials(options: {
     if (!value || /\s/.test(value) || value.length > 10_000) throw new Error(`${label} must be a non-empty value without spaces or line breaks. Setup did not finish.`);
     await credentials.set(key, value);
     // Read from the actual store, bypassing the resolver's in-memory cache.
-    if (await options.backend.get(key) !== value) throw new Error(`${label} could not be verified in Keychain. Setup did not finish.`);
-    options.write(`${label}: saved and verified in Keychain.`);
+    if (await options.backend.get(key) !== value) throw new Error(`${label} could not be verified in ${storeName}. Setup did not finish.`);
+    options.write(`${label}: saved and verified in ${storeName}.`);
     ready.push(key);
   }
   return ready;
@@ -66,6 +67,7 @@ export async function configureDesktopCredentials(options: {
  * writing anything, and read each value back from the native store. */
 export async function importDesktopCredentials(options: {
   backend: SecretBackend;
+  fallback?: SecretBackend;
   data: unknown;
   write: (message: string) => void;
 }): Promise<CredentialKey[]> {
@@ -80,17 +82,27 @@ export async function importDesktopCredentials(options: {
     values.set(known.data, value);
   }
   if (REQUIRED.some((key) => !values.has(key))) throw new Error('The private setup file must include both the planning and voice keys.');
-  const saved: CredentialKey[] = [];
-  for (const key of CredentialKeySchema.options) {
-    const value = values.get(key);
-    if (value === undefined) continue;
-    const existing = await options.backend.get(key).catch(() => null);
-    if (existing !== value) await options.backend.set(key, value);
-    if (await options.backend.get(key) !== value) throw new Error(`${CREDENTIAL_INFO[key].label} could not be verified in Keychain. Import did not finish.`);
-    options.write(`${CREDENTIAL_INFO[key].label}: saved and verified.`);
-    saved.push(key);
+  const stores = options.fallback ? [options.backend, options.fallback] : [options.backend];
+  for (const [index, store] of stores.entries()) {
+    try {
+      const saved: CredentialKey[] = [];
+      for (const key of CredentialKeySchema.options) {
+        const value = values.get(key);
+        if (value === undefined) continue;
+        const existing = await store.get(key).catch(() => null);
+        if (existing !== value) await store.set(key, value);
+        const storeName = store.source === 'file' ? 'the private credential file' : 'Keychain';
+        if (await store.get(key) !== value) throw new Error(`${CREDENTIAL_INFO[key].label} could not be verified in ${storeName}. Import did not finish.`);
+        options.write(`${CREDENTIAL_INFO[key].label}: saved and verified.`);
+        saved.push(key);
+      }
+      return saved;
+    } catch (error) {
+      if (index === stores.length - 1) throw error;
+      options.write('Keychain access is unavailable. Saving the supplied values in an owner-only private credential file.');
+    }
   }
-  return saved;
+  throw new Error('No credential store completed the import.');
 }
 
 /** The returned installer contains credentials and belongs in a private file,

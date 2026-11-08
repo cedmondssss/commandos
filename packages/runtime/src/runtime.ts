@@ -33,6 +33,7 @@ import {
   BrowserHub,
   type CommitMetrics,
   CredentialResolver,
+  FileCredentialBackend,
   MissingCredentialError,
   ProcedureMemory,
   ProcedureSourceSchema,
@@ -269,7 +270,10 @@ export class CommandRuntime extends EventEmitter<RuntimeEvents> {
     } catch (e) {
       this.log(`helper unavailable: ${e instanceof Error ? e.message : String(e)}`);
     }
-    const backend = this.opts.useKeychain !== false && this.helper.running ? keychainBackend(this.helper) : null;
+    const privateStore = new FileCredentialBackend(join(this.opts.dataDir, 'credentials.json'));
+    const hasPrivateStore = await privateStore.exists();
+    if (hasPrivateStore) await privateStore.list(); // validate owner, permissions and format before use
+    const backend = hasPrivateStore ? privateStore : this.opts.useKeychain !== false && this.helper.running ? keychainBackend(this.helper) : null;
     this.credentials = new CredentialResolver(backend, this.opts.env ?? process.env);
     if (this.opts.telemetry !== false && this.settings.telemetry.enabled) {
       const spaceId = await this.credentials.get('ARIZE_SPACE_ID');

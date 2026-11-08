@@ -1,5 +1,6 @@
 export * from './redaction';
 export * from './credentials';
+export * from './file-credentials';
 export * from './openai';
 export * from './elevenlabs';
 export * from './telemetry';

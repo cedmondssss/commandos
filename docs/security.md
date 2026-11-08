@@ -73,7 +73,14 @@ prompt-injection resistance. See [demo and methodology](hackbu-demo.md).
 | Store | Used for |
 |---|---|
 | macOS Keychain (`com.commandos.credentials`, via the helper) | primary; set from Settings |
+| App data `credentials.json` (owner-only, mode `0600`) | prefilled-import fallback when Keychain access fails; used as the selected store on subsequent starts |
 | Environment / `.env.local` (git-ignored) | development fallback |
+
+The desktop fallback lives at `~/Library/Application Support/CommandOS/credentials.json`
+(or the configured app data directory). It is plaintext protected by filesystem ownership
+and permissions, rather than Keychain encryption. Writes are serialized and atomically
+replaced; reads reject symlinks, files owned by other users, and group/other permissions.
+Settings labels this source as “private file”; changes and removals persist in that store.
 
 Keychain operations are non-interactive: the helper disallows authentication UI for each
 operation and scopes the legacy login-Keychain UI flag under a lock, restoring it afterward.
@@ -81,7 +88,7 @@ If macOS cannot authorize access silently, the operation returns an error. Reads
 existing development environment fallback where configured; the app does not automatically
 change Keychain ACLs, unlock the Keychain, or grant other applications access.
 
-Settings enumerates credential metadata without retrieving every secret. Credential reads
+Settings returns credential metadata rather than secret values. Credential reads
 and index loads coalesce concurrent requests, and missing/blocked reads are cached until
 explicit invalidation or replacement. Metadata marked “saved” is not a claim that the secret
 has been read or its provider has been verified. Secret values remain in the runtime process.

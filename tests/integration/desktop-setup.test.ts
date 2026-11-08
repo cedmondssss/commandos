@@ -2,6 +2,13 @@ import { describe, expect, it, vi } from 'vitest';
 import type { SecretBackend } from '@commandos/providers';
 import { CREDENTIAL_INFO, CredentialKeySchema } from '@commandos/contracts';
 import { spawnSync } from 'node:child_process';
+import { execFile } from 'node:child_process';
+import { chmod, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+import { promisify } from 'node:util';
+import { CredentialResolver, FileCredentialBackend } from '@commandos/providers';
+import { CommandRuntime } from '@commandos/runtime';
 import { configureDesktopCredentials, importDesktopCredentials, prefilledDesktopInstaller } from '../../scripts/lib/desktop-setup';
 
 function harness(initial: Record<string, string> = {}) {
@@ -19,6 +26,36 @@ function harness(initial: Record<string, string> = {}) {
 }
 
 describe('One-time desktop credential setup', () => {
+  it('recovers from Charlotte’s exact Keychain read failure and loads the values on a fresh runtime', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'commandos-keychain-fallback-'));
+    const helperPath = join(dir, 'locked-helper.cjs');
+    const dataDir = join(dir, 'data');
+    const input = join(dir, 'supplied.json');
+    const values = { OPENAI_API_KEY: 'fallback-planning', ELEVENLABS_API_KEY: 'fallback-voice', SPECTRON_URL: 'https://memory.example.invalid', SPECTRON_CONTEXT_ID: 'fallback-context-fixture', SPECTRON_API_KEY: 'fallback-memory' };
+    await writeFile(input, JSON.stringify(values), { mode: 0o600 });
+    // This helper cannot control apps. It reproduces the actual import failure.
+    await writeFile(helperPath, `#!${process.execPath}\nconst rl=require('node:readline').createInterface({input:process.stdin});\nconsole.log(JSON.stringify({event:'ready',version:'fixture'}));\nrl.on('line',line=>{const r=JSON.parse(line); const error={code:'keychain_locked',message:'Keychain access is unavailable for this helper. No password dialog was opened.'}; console.log(JSON.stringify(r.method==='keychain.get'?{id:r.id,ok:false,error}:{id:r.id,ok:true,result:r.method==='keychain.list'?{accounts:[]}:{ok:true}}));});\n`);
+    await chmod(helperPath, 0o700);
+    const env: NodeJS.ProcessEnv = { ...process.env, COMMANDOS_HELPER_PATH: helperPath, COMMANDOS_DATA_DIR: dataDir };
+    for (const key of CredentialKeySchema.options) delete env[key];
+    let runtime: CommandRuntime | undefined;
+    try {
+      const result = await promisify(execFile)('pnpm', ['exec', 'tsx', 'scripts/setup-desktop.ts', '--import', input], { cwd: resolve('.'), env, timeout: 25_000 });
+      expect(result.stdout).toContain('owner-only private credential file');
+      expect(result.stdout).toContain('Setup saved');
+      for (const value of Object.values(values)) expect(result.stdout + result.stderr).not.toContain(value);
+      const file = join(dataDir, 'credentials.json');
+      expect((await stat(file)).mode & 0o777).toBe(0o600);
+      expect(JSON.parse(await readFile(file, 'utf8'))).toEqual(values);
+      runtime = await CommandRuntime.create({ dataDir, helperPath, env: {}, telemetry: false, revealResults: false });
+      expect(await runtime.credentials.getWithSource('OPENAI_API_KEY')).toEqual({ value: 'fallback-planning', source: 'file' });
+      expect(await runtime.credentials.get('ELEVENLABS_API_KEY')).toBe('fallback-voice');
+      expect((await runtime.credentialStatus()).find((item) => item.key === 'SPECTRON_API_KEY')).toMatchObject({ source: 'file' });
+      const resolver = new CredentialResolver(new FileCredentialBackend(file), {});
+      expect(await resolver.get('SPECTRON_API_KEY')).toBe('fallback-memory');
+    } finally { await runtime?.shutdown(); await rm(dir, { recursive: true, force: true }); }
+  });
+
   it('imports prefilled values without prompting and reuses identical stored values', async () => {
     const h = harness();
     const data = { OPENAI_API_KEY: 'imported-planning', ELEVENLABS_API_KEY: 'imported-voice', SPECTRON_URL: 'https://memory.example.invalid', SPECTRON_CONTEXT_ID: 'fixture-context', SPECTRON_API_KEY: 'imported-memory' };

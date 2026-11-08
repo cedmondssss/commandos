@@ -6,8 +6,9 @@ import {
   type CredentialStatus,
 } from '@commandos/contracts';
 
-/** Storage for secrets. The runtime implements this with the Swift helper's Keychain methods. */
+/** Storage for secrets: macOS Keychain or the per-user private-file fallback. */
 export interface SecretBackend {
+  readonly source?: 'keychain' | 'file';
   get(account: string): Promise<string | null>;
   set(account: string, value: string): Promise<void>;
   delete(account: string): Promise<boolean>;
@@ -24,7 +25,7 @@ export class MissingCredentialError extends Error {
 }
 
 /**
- * Resolves credentials with precedence Keychain → environment. Values are cached in memory
+ * Resolves credentials with precedence selected local store → environment. Values are cached in memory
  * inside the runtime process only; they are never sent to the renderer or written to logs.
  */
 type ResolvedCredential = { value: string; source: Exclude<CredentialSource, 'missing'> };
@@ -67,7 +68,7 @@ export class CredentialResolver {
       if (this.backend && index.has(key)) {
         try {
           const value = await this.backend.get(key);
-          if (value) entry = { value, source: 'keychain' };
+          if (value) entry = { value, source: this.backend.source ?? 'keychain' };
         } catch {
           // The native backend refuses interactive access. Fall back without a password dialog.
         }
@@ -113,7 +114,7 @@ export class CredentialResolver {
       const info = CREDENTIAL_INFO[key];
       const cached = this.cache.get(key);
       if (cached) out.push({ key, ...info, source: cached.source, access: 'available' });
-      else if (index.has(key)) out.push({ key, ...info, source: 'keychain', access: this.cache.has(key) ? 'unavailable' : 'saved' });
+      else if (index.has(key)) out.push({ key, ...info, source: this.backend?.source ?? 'keychain', access: this.cache.has(key) ? 'unavailable' : 'saved' });
       else {
         const hasEnv = Boolean(this.env[key]?.trim());
         out.push({ key, ...info, source: hasEnv ? 'env' : 'missing', ...(hasEnv ? { access: 'available' as const } : {}) });
@@ -130,7 +131,7 @@ export class CredentialResolver {
     this.pending.delete(key);
     index.add(key);
     this.keychainAccounts = index;
-    this.cache.set(key, { value, source: 'keychain' });
+    this.cache.set(key, { value, source: this.backend.source ?? 'keychain' });
   }
 
   async delete(key: CredentialKey): Promise<void> {

@@ -1,6 +1,8 @@
 import { KEYCHAIN_SERVICE } from '@commandos/contracts';
 import { readFile, stat } from 'node:fs/promises';
-import type { SecretBackend } from '@commandos/providers';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+import { FileCredentialBackend, type SecretBackend } from '@commandos/providers';
 import { findHelperBinary, HelperClient } from '@commandos/tools';
 import { configureDesktopCredentials, importDesktopCredentials, readSecret } from './lib/desktop-setup';
 import { loadLocalEnv, ROOT } from './lib/env';
@@ -12,9 +14,9 @@ try {
   const importAt = process.argv.indexOf('--import');
   const importPath = importAt < 0 ? null : process.argv[importAt + 1];
   if (importAt >= 0 && (!importPath || importPath.startsWith('--'))) throw new Error('Give the private setup file after --import.');
-  console.log(importPath ? 'Importing the supplied CommandOS credentials into this Mac’s Keychain.' : 'CommandOS one-time setup. Existing credentials will be reused.');
+  console.log(importPath ? 'Importing the supplied CommandOS credentials onto this Mac.' : 'CommandOS one-time setup. Existing credentials will be reused.');
   if (!importPath) {
-    console.log('Missing keys are entered privately and saved in this Mac’s Keychain.');
+    console.log('Missing keys are entered privately and saved on this Mac.');
     console.log('You only need to enter each missing key once.\n');
   }
   const all = process.argv.includes('--all');
@@ -26,15 +28,18 @@ try {
     delete: async (account) => (await helper.call('keychain.delete', { service: KEYCHAIN_SERVICE, account })).deleted,
     list: async () => (await helper.call('keychain.list', { service: KEYCHAIN_SERVICE })).accounts,
   };
+  const dataDir = process.env.COMMANDOS_DATA_DIR ?? join(homedir(), 'Library', 'Application Support', 'CommandOS');
+  const fileStore = new FileCredentialBackend(join(dataDir, 'credentials.json'));
+  const useFileStore = await fileStore.exists();
   if (importPath) {
     let data: unknown;
     try {
       if ((await stat(importPath)).size > 200_000) throw new Error('too large');
       data = JSON.parse(await readFile(importPath, 'utf8'));
     } catch { throw new Error('Could not read the private setup file as credential JSON.'); }
-    await importDesktopCredentials({ backend, data, write: (message) => console.log(message) });
+    await importDesktopCredentials({ backend: useFileStore ? fileStore : backend, fallback: useFileStore ? undefined : fileStore, data, write: (message) => console.log(message) });
   } else {
-    await configureDesktopCredentials({ backend, env: process.env, prompt: readSecret, all, write: (message) => console.log(message) });
+    await configureDesktopCredentials({ backend: useFileStore ? fileStore : backend, env: process.env, prompt: readSecret, all, write: (message) => console.log(message) });
   }
   console.log('\nSetup saved. Starting CommandOS…');
 } catch (error) {

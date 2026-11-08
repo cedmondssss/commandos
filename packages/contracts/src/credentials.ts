@@ -39,7 +39,7 @@ export const CREDENTIAL_INFO: Readonly<Record<CredentialKey, CredentialInfo>> = 
   ARIZE_API_KEY: { provider: 'arize', label: 'Arize API key', secret: true, required: true },
 };
 
-export const CredentialSourceSchema = z.enum(['keychain', 'env', 'missing']);
+export const CredentialSourceSchema = z.enum(['keychain', 'file', 'env', 'missing']);
 export type CredentialSource = z.infer<typeof CredentialSourceSchema>;
 
 export const CredentialStatusSchema = z.object({

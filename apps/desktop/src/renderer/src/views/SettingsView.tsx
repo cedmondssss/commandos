@@ -31,14 +31,15 @@ function CredentialRow({ c, onChange }: { c: CredentialStatus; onChange: () => v
     } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
     finally { setBusy(false); }
   };
-  const sourceStyle = c.access === 'unavailable' ? 'bg-amber-950 text-amber-200' : c.source === 'keychain' ? 'bg-emerald-950 text-emerald-300' : c.source === 'env' ? 'bg-sky-950 text-sky-300' : 'bg-zinc-800 text-zinc-400';
+  const sourceName = c.source === 'file' ? 'private file' : c.source;
+  const sourceStyle = c.access === 'unavailable' ? 'bg-amber-950 text-amber-200' : ['keychain', 'file'].includes(c.source) ? 'bg-emerald-950 text-emerald-300' : c.source === 'env' ? 'bg-sky-950 text-sky-300' : 'bg-zinc-800 text-zinc-400';
   return (
     <div className="grid grid-cols-[220px_110px_minmax(0,1fr)_auto] items-center gap-3 border-t border-line px-4 py-2">
       <div>
         <div className="text-[12.5px] text-fg">{c.label}</div>
         <div className="font-mono text-[10.5px] text-muted">{c.key}</div>
       </div>
-      <Badge className={sourceStyle}>{c.access === 'unavailable' ? 'access unavailable' : c.access === 'saved' ? 'saved (keychain)' : c.source === 'missing' ? (c.required ? 'missing' : 'not set') : `set (${c.source})`}</Badge>
+      <Badge className={sourceStyle}>{c.access === 'unavailable' ? 'access unavailable' : c.access === 'saved' ? `saved (${sourceName})` : c.source === 'missing' ? (c.required ? 'missing' : 'not set') : `set (${sourceName})`}</Badge>
       <input
         type={c.secret ? 'password' : 'text'}
         value={value}
@@ -50,9 +51,9 @@ function CredentialRow({ c, onChange }: { c: CredentialStatus; onChange: () => v
       />
       <div className="flex gap-1.5">
         <Button size="sm" variant="primary" disabled={!value.trim() || busy} onClick={() => void save()}>
-          Save to Keychain
+          Save on this Mac
         </Button>
-        {c.source === 'keychain' && (
+        {['keychain', 'file'].includes(c.source) && (
           <Button size="sm" variant="ghost" disabled={busy} onClick={() => void remove()}>
             Remove
           </Button>
@@ -91,8 +92,8 @@ export function SettingsView() {
 
   return (
     <div className="space-y-4">
-      <Panel title="API credentials" actions={<span className="text-[11px] text-muted">stored in the macOS Keychain · never shown again · env is the fallback</span>}>
-        <p className="px-4 py-3 text-xs leading-relaxed text-muted">Credential checks run without macOS password dialogs. “Saved” means a Keychain entry exists; access is checked when needed. If Keychain access is unavailable, development environment credentials are used when configured.</p>
+      <Panel title="API credentials" actions={<span className="text-[11px] text-muted">stored on this Mac · saved values stay hidden</span>}>
+        <p className="px-4 py-3 text-xs leading-relaxed text-muted">Prefilled setup uses Keychain when available, or an owner-only private credential file when Keychain access is unavailable. Credential checks run without macOS password dialogs.</p>
         {creds.map((c) => (
           <CredentialRow key={c.key} c={c} onChange={load} />
         ))}
