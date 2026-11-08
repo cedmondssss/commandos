@@ -212,7 +212,7 @@ public enum Accessibility {
 
     @MainActor
     static func pid(forBundleId bundleId: String) throws -> pid_t {
-        guard let app = NSRunningApplication.runningApplications(withBundleIdentifier: bundleId).first else {
+        guard let app = Apps.runningApplication(bundleId: bundleId) else {
             throw HelperError("not_running", "app \(bundleId) is not running")
         }
         return app.processIdentifier

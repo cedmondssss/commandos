@@ -25,6 +25,16 @@ public enum Permissions {
 }
 
 public enum Apps {
+    /// Prefer the actual foreground process during native-sheet transitions; Launch
+    /// Services' bundle-ID list can briefly lag behind NSWorkspace's active app.
+    @MainActor
+    static func runningApplication(bundleId: String) -> NSRunningApplication? {
+        if let front = NSWorkspace.shared.frontmostApplication,
+           front.bundleIdentifier == bundleId, !front.isTerminated { return front }
+        return NSWorkspace.shared.runningApplications.first { $0.bundleIdentifier == bundleId && !$0.isTerminated }
+            ?? NSRunningApplication.runningApplications(withBundleIdentifier: bundleId).first { !$0.isTerminated }
+    }
+
     @MainActor
     static func describe(_ app: NSRunningApplication) -> [String: Any] {
         [
@@ -83,10 +93,24 @@ public enum Apps {
 
     @MainActor
     public static func activate(bundleId: String) throws -> [String: Any] {
-        guard let app = NSRunningApplication.runningApplications(withBundleIdentifier: bundleId).first else {
+        guard let app = runningApplication(bundleId: bundleId) else {
             throw HelperError("not_running", "app \(bundleId) is not running")
         }
+        _ = app.unhide()
         let ok = app.activate(options: [.activateAllWindows])
+        // Activating an app does not restore a minimized window. Hidden browser
+        // controls still expose AX bounds, so clicks can otherwise hit another app.
+        if AXIsProcessTrusted() {
+            let element = Accessibility.appElement(app.processIdentifier)
+            let windows = Accessibility.attr(element, kAXWindowsAttribute as String) as? [AXUIElement]
+            if let window = Accessibility.elementAttr(element, kAXFocusedWindowAttribute as String)
+                ?? Accessibility.elementAttr(element, kAXMainWindowAttribute as String) ?? windows?.first {
+                if Accessibility.boolAttr(window, kAXMinimizedAttribute as String) == true {
+                    _ = AXUIElementSetAttributeValue(window, kAXMinimizedAttribute as CFString, kCFBooleanFalse)
+                }
+                _ = AXUIElementPerformAction(window, kAXRaiseAction as CFString)
+            }
+        }
         return ["activated": ok]
     }
 

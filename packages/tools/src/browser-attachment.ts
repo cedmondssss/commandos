@@ -94,14 +94,16 @@ export function isQwenUrl(value: string): boolean {
 export function nativeFilePicker(elements: AxElement[]): AxElement[] | null {
   const webAreas = elements.filter((e) => e.role === 'AXWebArea');
   const roots = elements.filter((e) =>
-    (e.role === 'AXSheet' || e.role === 'AXDialog' || e.subrole === 'AXDialog') && !webAreas.some((web) => descendant(e, web.ref)),
+    (e.role === 'AXSheet' || e.role === 'AXDialog' || ['AXDialog', 'AXSystemDialog'].includes(e.subrole ?? '')
+      || (e.role === 'AXWindow' && ['open-panel', 'GoToWindow'].includes(e.identifier ?? '')))
+      && !webAreas.some((web) => descendant(e, web.ref)),
   );
   for (const root of roots) {
     const inside = elements.filter((e) => descendant(e, root.ref));
     if (inside.some((e) => button(e) && labels(e).some((s) => /^cancel$/i.test(s)))) return inside;
     // macOS presents Go to Folder as a separate native sheet with Close, not
     // Cancel. It replaces the open-panel AX tree while its path field is active.
-    if (root.role === 'AXSheet' && root.identifier === 'GoToWindow'
+    if (['AXSheet', 'AXWindow'].includes(root.role) && root.identifier === 'GoToWindow'
       && inside.some((e) => ['AXTextField', 'AXComboBox'].includes(e.role) && e.identifier === 'PathTextField' && e.enabled !== false)) return inside;
   }
   return null;

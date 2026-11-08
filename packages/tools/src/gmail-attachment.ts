@@ -13,10 +13,32 @@ const inside = (e: AxElement, ref: string) => e.ref.startsWith(`${ref}.`);
 const fail = (message: string) => new ToolError('upload_unverified', `${message} The draft was left unsent; check its attachment before retrying.`);
 type PageReader = () => Promise<HelperResult<'ax.webText'> | null>;
 
-async function readTree(ctx: ToolContext) {
-  const tree = await ctx.helper.call('ax.tree', { bundleId: CHROME, scope: 'window', maxDepth: 40, maxNodes: 5000 }, { signal: ctx.signal, timeoutMs: 3_000 });
+async function readTree(ctx: ToolContext, scope: 'window' | 'application' = 'window') {
+  const tree = await pollUntil(async () => {
+    try {
+      return await ctx.helper.call('ax.tree', { bundleId: CHROME, scope, maxDepth: 40, maxNodes: 5000 }, { signal: ctx.signal, timeoutMs: 4_000 });
+    } catch (error) {
+      const code = (error as { code?: string }).code;
+      const transient = code === 'not_running' || (code === 'not_found' && error instanceof Error && /accessible front window/.test(error.message));
+      if (!transient) throw error;
+      const front = await ctx.helper.call('apps.frontmost', {}, { signal: ctx.signal });
+      if (front.app?.bundleId !== CHROME) throw error;
+      return null; // read-only retry while Chrome still owns the foreground
+    }
+  }, 2_000, ctx.signal, 150, false);
+  if (!tree) throw fail('Chrome did not expose its attachment window after the dialog opened.');
   if (tree.truncated) throw fail('Could not read the complete Gmail attachment controls.');
   return tree.elements;
+}
+
+async function pickerElements(ctx: ToolContext, url: string) {
+  await assertTarget(ctx, url);
+  const window = nativeFilePicker(await readTree(ctx));
+  if (window) return window;
+  // On some Chrome/macOS versions the Open sheet is a sibling of the main
+  // browser window. A window-scoped walk cannot see that native sheet.
+  await assertTarget(ctx, url);
+  return nativeFilePicker(await readTree(ctx, 'application'));
 }
 
 /** Require one compose form; inbox/history text is never attachment evidence. */
@@ -46,12 +68,12 @@ async function assertTarget(ctx: ToolContext, url: string) {
 
 async function chooseFile(ctx: ToolContext, url: string, path: string) {
   await assertTarget(ctx, url);
-  if (!nativeFilePicker(await readTree(ctx))) throw fail('Gmail did not open the native file picker.');
+  if (!(await pickerElements(ctx, url))) throw fail('Gmail did not open the native file picker.');
   await ctx.helper.call('keyboard.press', { key: 'g', modifiers: ['command', 'shift'] }, { signal: ctx.signal });
   const pathField = await pollUntil(async () => {
     await assertTarget(ctx, url);
     const focused = await ctx.helper.call('ax.focused', {}, { signal: ctx.signal });
-    const panel = nativeFilePicker(await readTree(ctx));
+    const panel = await pickerElements(ctx, url);
     return focused.bundleId === CHROME && focused.element && ['AXTextField', 'AXComboBox'].includes(focused.element.role)
       && panel?.some((e) => e.ref === focused.element?.ref) ? focused.element : null;
   }, 2_000, ctx.signal, 100, false);
@@ -60,7 +82,7 @@ async function chooseFile(ctx: ToolContext, url: string, path: string) {
   await assertTarget(ctx, url);
   await ctx.helper.call('ax.setValue', { ref: pathField.ref, value: path }, { signal: ctx.signal });
   const typed = await ctx.helper.call('ax.focused', {}, { signal: ctx.signal });
-  const panel = nativeFilePicker(await readTree(ctx));
+  const panel = await pickerElements(ctx, url);
   if (typed.bundleId !== CHROME || typed.element?.value !== path || !panel?.some((e) => e.ref === typed.element?.ref)) {
     throw fail('Could not verify the exact attachment path.');
   }
@@ -69,7 +91,7 @@ async function chooseFile(ctx: ToolContext, url: string, path: string) {
   await ctx.helper.call('keyboard.press', { key: 'return', modifiers: [] }, { signal: ctx.signal });
   const open = await pollUntil(async () => {
     await assertTarget(ctx, url);
-    const panel = nativeFilePicker(await readTree(ctx));
+    const panel = await pickerElements(ctx, url);
     const button = panel?.find((e) => e.role === 'AXButton' && e.enabled !== false && labels(e).includes('Open'));
     // Finder may hide the extension. Go to Folder has already accepted the full path.
     const names = [basename(path), basename(path, extname(path))].map(clean);
@@ -123,8 +145,8 @@ export async function attachGmailImages(ctx: ToolContext, inputs: string[], read
       if (!clicked.clicked) throw fail('Gmail’s Attach files control did not open.');
       const picker = await pollUntil(async () => {
         await assertTarget(ctx, url);
-        return nativeFilePicker(await readTree(ctx));
-      }, 2_000, ctx.signal, 100, false);
+        return pickerElements(ctx, url);
+      }, 5_000, ctx.signal, 150, false);
       if (!picker) throw fail('Gmail did not open the native file picker.');
       await chooseFile(ctx, url, path);
       let readyAt: number | null = null;

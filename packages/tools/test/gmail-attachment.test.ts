@@ -19,6 +19,7 @@ function harness(path: string, options: {
   existingFilename?: boolean; truncated?: boolean; body?: string;
   pageReadyMs?: number; initialPageState?: 'unavailable' | 'busy' | 'truncated' | 'missing-metadata';
   postUploadUnavailableMs?: number;
+  pickerOutsideWindow?: boolean; windowPicker?: boolean; transientPickerReads?: number;
 } = {}) {
   let phase = 'compose';
   let pathValue = '';
@@ -27,16 +28,17 @@ function harness(path: string, options: {
   let uploadedAt = 0;
   let uploads = 0;
   let sends = 0;
+  let transientReads = options.transientPickerReads ?? 0;
   const uploading = () => phase === 'upload' && Date.now() - uploadedAt < (options.uploadMs ?? 0);
   const labelName = options.normalSpaces ? basename(path).replace(/\s/g, ' ') : basename(path);
   const tree = () => {
     if (phase === 'goto') return [
-      el('1:0.3', 'AXSheet', '', { identifier: 'GoToWindow' }),
+      el('1:0.3', options.windowPicker ? 'AXWindow' : 'AXSheet', '', { identifier: 'GoToWindow' }),
       el('1:0.3.0', 'AXButton', 'Close'),
       el('1:0.3.1', 'AXTextField', '', { identifier: 'PathTextField', value: pathValue }),
     ];
     if (phase === 'picker' || phase === 'selected') return [
-      el('1:0.2', 'AXSheet', '', { identifier: 'open-panel' }),
+      el('1:0.2', options.windowPicker ? 'AXWindow' : 'AXSheet', '', { identifier: 'open-panel' }),
       el('1:0.2.0', 'AXButton', 'Cancel'),
       el('1:0.2.1', 'AXButton', 'Open', { enabled: phase === 'selected' }),
       ...(phase === 'selected' ? [el('1:0.2.2', 'AXImage', '', {
@@ -80,7 +82,11 @@ function harness(path: string, options: {
         ...(notReady && options.initialPageState === 'missing-metadata' ? { busy: undefined, progressIndicators: undefined } : {}),
       };
     }
-    if (method === 'ax.tree') return { elements: tree(), truncated: options.truncated ?? false };
+    if (method === 'ax.tree') {
+      if (phase === 'picker' && transientReads-- > 0) throw Object.assign(new Error('ax.tree: app com.google.Chrome is not running'), { code: 'not_running' });
+      const hiddenSheet = options.pickerOutsideWindow && params.scope === 'window' && ['picker', 'goto', 'selected'].includes(phase);
+      return { elements: hiddenSheet ? [el('1:0', 'AXWindow', 'Gmail'), el('1:0.1', 'AXWebArea', 'Gmail')] : tree(), truncated: options.truncated ?? false };
+    }
     if (method === 'ax.click' && params.text === 'Attach files') {
       if (!options.noPicker) phase = 'picker';
       return { clicked: true };
@@ -130,6 +136,15 @@ async function settle(h: ReturnType<typeof harness>, ms = 25_000) {
 }
 
 describe('Gmail photo attachment through the native picker', () => {
+  it.each([{ pickerOutsideWindow: true }, { pickerOutsideWindow: true, windowPicker: true }, { transientPickerReads: 2 }])('handles native picker placement and transient process lookups: %j', async (options) => {
+    vi.useFakeTimers();
+    const h = harness(path, options);
+    expect(await settle(h, 2_000)).toMatchObject({ value: { attached: [path] } });
+    expect(h.uploads()).toBe(1);
+    expect(h.sends()).toBe(0);
+    if (options.pickerOutsideWindow) expect(h.call).toHaveBeenCalledWith('ax.tree', expect.objectContaining({ scope: 'application' }), expect.anything());
+  });
+
   it.each(['unavailable', 'busy', 'truncated', 'missing-metadata'] as const)('waits for a %s compose page before attempting the attachment', async (initialPageState) => {
     vi.useFakeTimers();
     const h = harness(path, { pageReadyMs: 2_000, initialPageState });
