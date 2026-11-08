@@ -61,3 +61,67 @@ export async function configureDesktopCredentials(options: {
   }
   return ready;
 }
+
+/** Import only the app's known settings. Validate the entire private payload before
+ * writing anything, and read each value back from the native store. */
+export async function importDesktopCredentials(options: {
+  backend: SecretBackend;
+  data: unknown;
+  write: (message: string) => void;
+}): Promise<CredentialKey[]> {
+  if (!options.data || typeof options.data !== 'object' || Array.isArray(options.data)) throw new Error('The private setup file must contain a credential object.');
+  const entries = Object.entries(options.data);
+  const values = new Map<CredentialKey, string>();
+  for (const [key, value] of entries) {
+    const known = CredentialKeySchema.safeParse(key);
+    if (!known.success || typeof value !== 'string' || !value.trim() || /\s/.test(value) || value.length > 10_000) {
+      throw new Error('The private setup file contains an unknown setting or invalid value. Nothing was imported.');
+    }
+    values.set(known.data, value);
+  }
+  if (REQUIRED.some((key) => !values.has(key))) throw new Error('The private setup file must include both the planning and voice keys.');
+  const saved: CredentialKey[] = [];
+  for (const key of CredentialKeySchema.options) {
+    const value = values.get(key);
+    if (value === undefined) continue;
+    const existing = await options.backend.get(key).catch(() => null);
+    if (existing !== value) await options.backend.set(key, value);
+    if (await options.backend.get(key) !== value) throw new Error(`${CREDENTIAL_INFO[key].label} could not be verified in Keychain. Import did not finish.`);
+    options.write(`${CREDENTIAL_INFO[key].label}: saved and verified.`);
+    saved.push(key);
+  }
+  return saved;
+}
+
+/** The returned installer contains credentials and belongs in a private file,
+ * outside the repository. Base64 is transport encoding, not encryption. */
+export function prefilledDesktopInstaller(values: Partial<Record<CredentialKey, string>>): string {
+  if (REQUIRED.some((key) => !values[key])) throw new Error('Both planning and voice keys are needed to create the installer.');
+  const payload = Buffer.from(JSON.stringify(values), 'utf8').toString('base64').match(/.{1,76}/g)!.join('\n');
+  return `#!/bin/bash
+set +x
+set -euo pipefail
+umask 077
+task_repo="$HOME/commandos"
+task_credentials=""
+cleanup() { if [ -n "$task_credentials" ]; then rm -f "$task_credentials"; fi; }
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+if [ ! -d "$task_repo/.git" ]; then
+  git clone https://github.com/cedmondssss/commandos.git "$task_repo"
+fi
+cd "$task_repo"
+git pull --ff-only
+pnpm install --frozen-lockfile
+pnpm build:helper
+task_credentials="$(mktemp "\${TMPDIR:-/tmp}/commandos-credentials.XXXXXX")"
+/usr/bin/base64 -D > "$task_credentials" <<'COMMANDOS_CREDENTIALS'
+${payload}
+COMMANDOS_CREDENTIALS
+pnpm exec tsx scripts/setup-desktop.ts --import "$task_credentials"
+rm -f "$task_credentials"
+task_credentials=""
+COMMANDOS_OPEN_DASHBOARD=1 pnpm --filter @commandos/desktop dev
+`;
+}

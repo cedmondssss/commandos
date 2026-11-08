@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { SecretBackend } from '@commandos/providers';
 import { CREDENTIAL_INFO, CredentialKeySchema } from '@commandos/contracts';
-import { configureDesktopCredentials } from '../../scripts/lib/desktop-setup';
+import { spawnSync } from 'node:child_process';
+import { configureDesktopCredentials, importDesktopCredentials, prefilledDesktopInstaller } from '../../scripts/lib/desktop-setup';
 
 function harness(initial: Record<string, string> = {}) {
   const values = new Map(Object.entries(initial));
@@ -18,6 +19,45 @@ function harness(initial: Record<string, string> = {}) {
 }
 
 describe('One-time desktop credential setup', () => {
+  it('imports prefilled values without prompting and reuses identical stored values', async () => {
+    const h = harness();
+    const data = { OPENAI_API_KEY: 'imported-planning', ELEVENLABS_API_KEY: 'imported-voice', SPECTRON_URL: 'https://memory.example.invalid', SPECTRON_CONTEXT_ID: 'fixture-context', SPECTRON_API_KEY: 'imported-memory' };
+    expect(await importDesktopCredentials({ ...h.options, data })).toEqual(Object.keys(data));
+    expect(Object.fromEntries(h.values)).toEqual(data);
+    expect(h.prompt).not.toHaveBeenCalled();
+    expect(h.output.join('\n')).not.toMatch(/imported-planning|imported-voice|imported-memory/);
+    const writes = vi.mocked(h.backend.set).mock.calls.length;
+    await importDesktopCredentials({ ...h.options, data });
+    expect(h.backend.set).toHaveBeenCalledTimes(writes);
+  });
+
+  it.each([null, [], { OPENAI_API_KEY: 'partial' }, { OPENAI_API_KEY: 'a', ELEVENLABS_API_KEY: 'b', UNRECOGNIZED: 'payload' }, { OPENAI_API_KEY: 'a\nb', ELEVENLABS_API_KEY: 'c' }])('validates the complete import before writing any values: %j', async (data) => {
+    const h = harness();
+    await expect(importDesktopCredentials({ ...h.options, data })).rejects.toThrow();
+    expect(h.backend.set).not.toHaveBeenCalled();
+    expect(h.output).toEqual([]);
+  });
+
+  it('refuses an import whose native store fails read-back', async () => {
+    const h = harness();
+    vi.mocked(h.backend.set).mockResolvedValue(undefined);
+    await expect(importDesktopCredentials({ ...h.options, data: { OPENAI_API_KEY: 'a', ELEVENLABS_API_KEY: 'b' } })).rejects.toThrow('could not be verified in Keychain');
+    expect(h.output).toEqual([]);
+  });
+
+  it('builds a valid shell installer with credentials transported as data', () => {
+    const data = { OPENAI_API_KEY: 'fake-quote\'"$HOME;$(id)', ELEVENLABS_API_KEY: 'fake-voice' };
+    const installer = prefilledDesktopInstaller(data);
+    const parsed = spawnSync('/bin/bash', ['-n'], { input: installer, encoding: 'utf8' });
+    expect(parsed.status).toBe(0);
+    const payload = /<<'COMMANDOS_CREDENTIALS'\n([A-Za-z0-9+/=\n]+)\nCOMMANDOS_CREDENTIALS/.exec(installer)?.[1];
+    expect(JSON.parse(Buffer.from(payload!, 'base64').toString('utf8'))).toEqual(data);
+    expect(installer).not.toContain(data.OPENAI_API_KEY);
+    expect(installer).toContain('umask 077');
+    expect(installer).toContain('trap cleanup EXIT');
+    expect(installer).toContain('--import "$task_credentials"');
+  });
+
   it('includes every integration credential and configuration value in all-integrations mode', async () => {
     const h = harness();
     h.prompt.mockResolvedValue('fixture-credential');
