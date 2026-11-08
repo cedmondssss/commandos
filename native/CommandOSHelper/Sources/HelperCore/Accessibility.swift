@@ -430,12 +430,16 @@ public enum Accessibility {
         return ["value": orNull(readBack)]
     }
 
-    /// Find a Chromium control by its current accessible label and click its live screen bounds.
+    /// Click a live Chromium control or Photo Booth's verified still-photo shutter.
     public static func click(bundleId: String, query: AxQuery, expectLabel: String) async throws -> [String: Any] {
         try requireTrusted()
-        guard ["com.google.Chrome", "com.microsoft.edgemac", "com.brave.Browser", "company.thebrowser.Browser"].contains(bundleId),
+        let chromium = ["com.google.Chrome", "com.microsoft.edgemac", "com.brave.Browser", "company.thebrowser.Browser"].contains(bundleId)
+        let photoShutter = bundleId == "com.apple.PhotoBooth" && query.role == "AXButton" && query.identifier == nil
+            && query.text?.caseInsensitiveCompare(expectLabel) == .orderedSame
+            && ["take photo", "take picture", "take a picture"].contains(expectLabel.lowercased())
+        guard chromium || photoShutter,
               query.text != nil || query.identifier != nil else {
-            throw HelperError("bad_params", "ax.click requires a Chromium target with a label or identifier")
+            throw HelperError("bad_params", "ax.click requires a labeled Chromium control or Photo Booth's still-photo shutter")
         }
         let pid: pid_t = try await Accessibility.pid(forBundleId: bundleId)
         var matches: [(AXUIElement, Snapshot)] = []
@@ -449,18 +453,27 @@ public enum Accessibility {
         guard matches.count == 1, let (element, snap) = matches.first,
               snap.enabled != false,
               ["AXButton", "AXLink", "AXMenuItem", "AXPopUpButton", "AXCheckBox", "AXRadioButton"].contains(snap.role) else {
-            throw HelperError("not_found", "no unique enabled Chromium control matches the requested label")
+            throw HelperError("not_found", "no unique enabled control matches the requested label")
         }
         let labels = [snap.title, snap.label, snap.description, snap.identifier].compactMap { $0 }
         guard labels.contains(where: { $0.localizedCaseInsensitiveContains(expectLabel) }) else {
-            throw HelperError("label_mismatch", "the Chromium control no longer matches the expected label")
+            throw HelperError("label_mismatch", "the control no longer matches the expected label")
         }
         let frame = try clickableFrame(element)
         guard let x = frame["x"], let y = frame["y"],
               let width = frame["width"], let height = frame["height"], width > 0, height > 0 else {
-            throw HelperError("not_visible", "the Chromium control has no clickable screen bounds")
+            throw HelperError("not_visible", "the control has no clickable screen bounds")
         }
-        _ = try Mouse.click(x: x + width / 2, y: y + height / 2, button: "left", clicks: 1)
+        if photoShutter {
+            try await MainActor.run { () throws -> Void in
+                guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else {
+                    throw HelperError("not_frontmost", "Photo Booth lost focus before its shutter could be clicked")
+                }
+                _ = try Mouse.click(x: x + width / 2, y: y + height / 2, button: "left", clicks: 1)
+            }
+        } else {
+            _ = try Mouse.click(x: x + width / 2, y: y + height / 2, button: "left", clicks: 1)
+        }
         return ["clicked": true]
     }
 

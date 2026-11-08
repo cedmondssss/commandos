@@ -85,9 +85,18 @@ export const photoBoothTakePhoto = defineTool({
     }, 8_000, ctx.signal, 150, false);
     if (!shutter) throw new ToolError('page_not_ready', 'Photo Booth’s shutter stayed disabled. Resume its preview and make sure the camera is available; no capture was started.');
     await requirePhotoBoothFocus(ctx);
-    ctx.progress('Smile: Photo Booth counts down from 3');
-    const pressed = await ctx.helper.call('ax.press', { ref: shutter.ref }, { signal: ctx.signal });
-    if (!pressed.ok) throw new ToolError('input_unverified', 'Photo Booth did not acknowledge the shutter. Check its library before taking another photo.');
+    const shutterLabel = labels(shutter).find((s) => /^(?:take photo|take (?:a )?picture)$/.test(s))!;
+    ctx.progress('Clicking Photo Booth’s shutter once');
+    try {
+      // AXPress can acknowledge Photo Booth's custom shutter without firing it.
+      // Re-find the enabled control and physically click its current bounds.
+      const clicked = await ctx.helper.call('ax.click', { bundleId: PHOTO_BOOTH, role: 'AXButton', text: shutterLabel, expectLabel: shutterLabel }, { signal: ctx.signal });
+      if (!clicked.clicked) throw new Error('Click was not acknowledged');
+    } catch {
+      ctx.signal.throwIfAborted();
+      throw new ToolError('input_unverified', 'Photo Booth’s shutter click could not be confirmed. Check its library before taking another photo.');
+    }
+    ctx.progress('Waiting for Photo Booth’s countdown and saved photo');
     const deadline = Date.now() + 12_000;
     while (Date.now() < deadline) {
       await delay(400, ctx.signal);
@@ -100,7 +109,7 @@ export const photoBoothTakePhoto = defineTool({
         return { path, name: fresh.name };
       }
     }
-    throw new ToolError('not_taken', 'Photo Booth did not save a new photo. Is the camera free and Photo Booth in front?');
+    throw new ToolError('input_unverified', 'Sent one shutter click, but Photo Booth did not save a new photo. Check Photo Booth before retrying; no email was prepared.');
   },
 });
 
