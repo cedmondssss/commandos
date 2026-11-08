@@ -6,9 +6,9 @@
   "description": "CommandOS \u2014 voice-driven macOS computer agent",
   "main": "./out/main/index.js",
   "scripts": {
-    "dev": "env -u ELECTRON_RUN_AS_NODE electron-vite dev",
+    "dev": "install-electron && env -u ELECTRON_RUN_AS_NODE electron-vite dev",
     "build": "electron-vite build",
-    "preview": "env -u ELECTRON_RUN_AS_NODE electron-vite preview",
+    "preview": "install-electron && env -u ELECTRON_RUN_AS_NODE electron-vite preview",
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
