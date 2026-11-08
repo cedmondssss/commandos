@@ -93,10 +93,22 @@ export async function attachGmailImages(ctx: ToolContext, inputs: string[], read
     }
     await ctx.helper.call('apps.activate', { bundleId: CHROME }, { signal: ctx.signal });
     for (const path of paths) {
-      const before = await readPage();
-      if (!before?.url || before.truncated || before.busy !== false || before.progressIndicators === undefined) {
-        throw fail('Gmail did not expose enough information to verify an attachment.');
-      }
+      ctx.progress('Waiting for Gmail’s attachment controls to finish loading');
+      let readinessIssue = 'the compose page was not readable';
+      // The Compose window title can appear before its AX document is available.
+      // Retry only these reads; never reopen the draft or repeat an upload here.
+      const before = await pollUntil(async () => {
+        const page = await readPage();
+        if (!page?.url) { readinessIssue = 'the compose page was not readable'; return null; }
+        if (page.truncated) { readinessIssue = 'the page read was incomplete'; return null; }
+        if (page.busy === undefined || page.progressIndicators === undefined) {
+          readinessIssue = 'the helper did not return upload-state information';
+          return null;
+        }
+        if (page.busy || page.progressIndicators) { readinessIssue = 'Gmail was still busy'; return null; }
+        return page;
+      }, 10_000, ctx.signal, 200, false);
+      if (!before?.url) throw fail(`Gmail attachment controls did not become ready: ${readinessIssue}.`);
       const url = before.url;
       await assertTarget(ctx, url);
       const initial = draftElements(await readTree(ctx));
@@ -119,7 +131,7 @@ export async function attachGmailImages(ctx: ToolContext, inputs: string[], read
       const uploaded = await pollUntil(async () => {
         await assertTarget(ctx, url);
         const page = await readPage();
-        if (!page || page.url !== url || page.truncated) return null;
+        if (!page || page.url !== url || page.truncated) { readyAt = null; return null; }
         const elements = await readTree(ctx);
         if (nativeFilePicker(elements)) return null;
         const draft = attachmentElements(draftElements(elements));

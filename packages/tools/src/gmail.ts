@@ -35,15 +35,16 @@ export function gmailComposeUrl(d: { to: string; subject: string; body: string; 
 }
 
 async function enableChromePage(ctx: ToolContext): Promise<void> {
-  await ctx.helper.call('ax.enableWeb', { bundleId: CHROME, on: true }, { signal: ctx.signal, timeoutMs: 1_000 }).catch(() => {
+  await ctx.helper.call('ax.enableWeb', { bundleId: CHROME, on: true }, { signal: ctx.signal, timeoutMs: 4_000 }).catch(() => {
     ctx.signal.throwIfAborted(); // old helpers and inaccessible pages still have the OCR fallback
   });
 }
 
 /** Fast, on-device page evidence; ignore any page outside Gmail. No screenshots on this path. */
 async function chromePage(ctx: ToolContext) {
-  const p = await ctx.helper.call('ax.webText', { bundleId: CHROME, maxChars: 30_000 }, { signal: ctx.signal, timeoutMs: 1_000 }).catch(() => {
+  const p = await ctx.helper.call('ax.webText', { bundleId: CHROME, maxChars: 30_000 }, { signal: ctx.signal, timeoutMs: 4_000 }).catch((error: unknown) => {
     ctx.signal.throwIfAborted();
+    ctx.log('debug', 'Gmail page read unavailable', { error: error instanceof Error ? error.message : String(error) });
     return null;
   });
   if (!p?.found || !p.url) return null;

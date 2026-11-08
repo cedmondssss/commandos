@@ -17,10 +17,13 @@ function harness(path: string, options: {
   noPicker?: boolean; wrongPath?: boolean; wrongFile?: boolean; hiddenExtension?: boolean;
   loseFocus?: boolean; changeTab?: boolean; oldHelper?: boolean; openAckLost?: boolean;
   existingFilename?: boolean; truncated?: boolean; body?: string;
+  pageReadyMs?: number; initialPageState?: 'unavailable' | 'busy' | 'truncated' | 'missing-metadata';
+  postUploadUnavailableMs?: number;
 } = {}) {
   let phase = 'compose';
   let pathValue = '';
   let url = '';
+  let openedAt = 0;
   let uploadedAt = 0;
   let uploads = 0;
   let sends = 0;
@@ -58,7 +61,7 @@ function harness(path: string, options: {
   const call = vi.fn(async (method: string, params: Record<string, unknown>): Promise<unknown> => {
     // Exercise the real RPC parameter limits; a permissive mock hid maxNodes: 12000.
     HelperMethods[method as HelperMethodName].params.parse(params);
-    if (method === 'workspace.open') { url = String(params.url); return { opened: true }; }
+    if (method === 'workspace.open') { url = String(params.url); openedAt = Date.now(); return { opened: true }; }
     if (method === 'apps.activate') return { activated: true };
     if (method === 'apps.frontmost') return { app: { bundleId: options.loseFocus && phase === 'picker' ? 'com.apple.PhotoBooth' : CHROME } };
     if (method === 'osa.run') return { items: [options.changeTab && phase === 'picker' ? 'https://example.com/' : url], result: null };
@@ -66,8 +69,16 @@ function harness(path: string, options: {
     if (method === 'ax.enableWeb') return { ok: true, code: 0 };
     if (method === 'ax.webText') {
       if (options.oldHelper) throw new Error('unknown_method');
+      const notReady = phase === 'compose' && Date.now() - openedAt < (options.pageReadyMs ?? 0);
+      if ((notReady && options.initialPageState === 'unavailable')
+        || (phase === 'upload' && Date.now() - uploadedAt < (options.postUploadUnavailableMs ?? 0))) {
+        return { title: 'Compose Mail', url: null, text: '', found: false, truncated: false, nodes: 1 };
+      }
       return { title: 'Compose Mail', url, text: 'Send\nPhoto', found: true, truncated: false, nodes: 10,
-        images: 1, busy: false, progressIndicators: uploading() ? 1 : 0 };
+        images: 1, busy: notReady && options.initialPageState === 'busy', progressIndicators: uploading() ? 1 : 0,
+        ...(notReady && options.initialPageState === 'truncated' ? { truncated: true } : {}),
+        ...(notReady && options.initialPageState === 'missing-metadata' ? { busy: undefined, progressIndicators: undefined } : {}),
+      };
     }
     if (method === 'ax.tree') return { elements: tree(), truncated: options.truncated ?? false };
     if (method === 'ax.click' && params.text === 'Attach files') {
@@ -119,6 +130,29 @@ async function settle(h: ReturnType<typeof harness>, ms = 25_000) {
 }
 
 describe('Gmail photo attachment through the native picker', () => {
+  it.each(['unavailable', 'busy', 'truncated', 'missing-metadata'] as const)('waits for a %s compose page before attempting the attachment', async (initialPageState) => {
+    vi.useFakeTimers();
+    const h = harness(path, { pageReadyMs: 2_000, initialPageState });
+    let finished = false;
+    const result = gmailCompose.run(args(), h.ctx).then((value) => ({ value }), (error: unknown) => ({ error })).finally(() => { finished = true; });
+    await vi.waitFor(() => expect(h.call).toHaveBeenCalledWith('apps.activate', expect.anything(), expect.anything()));
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(h.uploads()).toBe(0);
+    expect(finished).toBe(false);
+    await vi.advanceTimersByTimeAsync(1_500);
+    expect(await result).toMatchObject({ value: { attached: [path] } });
+    expect(h.uploads()).toBe(1);
+    expect(h.sends()).toBe(0);
+  });
+
+  it('rechecks temporarily unavailable upload evidence without attaching the file again', async () => {
+    vi.useFakeTimers();
+    const h = harness(path, { postUploadUnavailableMs: 2_000 });
+    expect(await settle(h, 2_500)).toMatchObject({ value: { attached: [path] } });
+    expect(h.uploads()).toBe(1);
+    expect(h.sends()).toBe(0);
+  });
+
   it.each([{ normalSpaces: true }, { hiddenExtension: true }])('attaches the exact Photo Booth file without relying on image counts: %j', async (options) => {
     vi.useFakeTimers();
     const h = harness(path, options);
