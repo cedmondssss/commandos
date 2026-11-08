@@ -1,7 +1,7 @@
 import { defaultSettings } from '@commandos/contracts';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { browserReadPage, matchesPageUrl } from '../src/browserpage';
-import { gmailCompose, gmailSend } from '../src/gmail';
+import { gmailSend } from '../src/gmail';
 import { delay } from '../src/poll';
 import { type ToolContext } from '../src/types';
 
@@ -115,13 +115,11 @@ describe('browser latency and readiness', () => {
 });
 
 function gmailContext(options: {
-  uploadMs?: number; failUpload?: boolean; wrongDraft?: boolean; noComposeTitle?: boolean; progressOnly?: boolean; oldHelper?: boolean;
+  wrongDraft?: boolean; noComposeTitle?: boolean;
   wrongRecipient?: boolean; wrongBody?: boolean; ambiguousSend?: boolean; noSendAck?: boolean; pressThrows?: boolean;
   sentText?: string; staleSentBanner?: boolean; navigatedAfterSend?: boolean; noPressAction?: boolean;
   closeAfterSend?: boolean; noSentReceipt?: boolean; wrongSentSubject?: boolean; staleSentQuery?: boolean;
-  attachmentControl?: boolean; imagesUnchanged?: boolean;
 } = {}) {
-  let pastedAt: number | null = null;
   let sent = false;
   let sentSearchUrl: string | null = null;
   const ctx = context(async (method, params) => {
@@ -147,34 +145,27 @@ function gmailContext(options: {
         el('1:0.1.2', 'AXTextArea', 'Message Body', options.wrongBody ? 'Unapproved extra text' : '\u200b\n\u200b'),
         el('1:0.1.3', 'AXButton', 'Send \u202a(⌘Enter)\u202c'),
         el('1:0.1.4', 'AXButton', 'More send options'),
-        ...(options.attachmentControl && pastedAt !== null ? [el('1:0.1.5', 'AXButton', 'Remove attachment')] : []),
         ...(options.ambiguousSend ? [el('1:0.1.6', 'AXButton', 'Send')] : []),
       ] };
     }
     if (method === 'ax.find')
       return { elements: [{ title: sent ? 'Inbox - me@example.com - Gmail' : options.noComposeTitle ? 'Gmail' : 'Compose Mail - me@example.com - Gmail', frame }] };
-    if (options.oldHelper && ['ax.enableWeb', 'ax.webText'].includes(method)) throw new Error('unknown_method');
     if (method === 'ax.enableWeb') return { ok: true, code: 0 };
     if (method === 'ax.webText') {
       if (sentSearchUrl && options.closeAfterSend) return page('Search results\nPhoto', { url: options.staleSentQuery ? 'https://mail.google.com/mail/u/0/#search/in%3Asent' : sentSearchUrl });
-      const uploading = pastedAt !== null && Date.now() - pastedAt < (options.uploadMs ?? 0);
       return page(
         sent
           ? (options.sentText ?? 'Message sent')
-          : options.failUpload && pastedAt !== null
-            ? 'Upload failed'
-            : `Send\n${options.wrongDraft ? 'Wrong message' : 'Photo'}${uploading && !options.progressOnly ? '\nUploading' : ''}${options.staleSentBanner ? '\nMessage sent' : ''}`,
+          : `Send\n${options.wrongDraft ? 'Wrong message' : 'Photo'}${options.staleSentBanner ? '\nMessage sent' : ''}`,
         {
           title: 'Gmail',
           url: sent && (options.navigatedAfterSend || options.closeAfterSend) ? 'https://example.com/' : 'https://mail.google.com/mail/u/0/?to=me%40example.com',
-          images: pastedAt === null || options.imagesUnchanged ? 1 : 2,
-          busy: uploading && !options.progressOnly,
-          progressIndicators: uploading ? 1 : 0,
+          busy: false,
+          progressIndicators: 0,
         },
       );
     }
     if (method === 'keyboard.press') {
-      if (params.key === 'v') pastedAt = Date.now();
       if (params.key === 'return') sent = true;
     }
     if (method === 'ax.press' || (method === 'mouse.click' && options.noPressAction)) {
@@ -188,57 +179,7 @@ function gmailContext(options: {
   return ctx;
 }
 
-describe('Gmail readiness without fixed waits or screen capture', () => {
-  const compose = gmailCompose.args.parse({ to: 'me', subject: 'Photo', body: '', attachments: ['/tmp/photo.png'] });
-
-  it('finishes a ready attachment in 300 ms instead of the fixed three-second sleep', async () => {
-    vi.useFakeTimers();
-    const ctx = gmailContext();
-    const result = gmailCompose.run(compose, ctx);
-    await vi.advanceTimersByTimeAsync(300);
-    expect((await result).attached).toEqual(['/tmp/photo.png']);
-    expect(vi.getTimerCount()).toBe(0);
-    expect(ctx.helper.call).not.toHaveBeenCalledWith('screen.capture', expect.anything(), expect.anything());
-  });
-
-  it('keeps waiting for a slow upload instead of sending after three seconds', async () => {
-    vi.useFakeTimers();
-    const ctx = gmailContext({ uploadMs: 4_000, progressOnly: true });
-    let finished = false;
-    const result = gmailCompose.run(compose, ctx).then((r) => {
-      finished = true;
-      return r;
-    });
-    await vi.advanceTimersByTimeAsync(3_000);
-    expect(finished).toBe(false);
-    await vi.advanceTimersByTimeAsync(1_300);
-    expect((await result).attached).toEqual(['/tmp/photo.png']);
-  });
-
-  it('verifies a pasted image from its new attachment control when Chrome omits it from the image count', async () => {
-    vi.useFakeTimers();
-    const ctx = gmailContext({ attachmentControl: true, imagesUnchanged: true });
-    const result = gmailCompose.run(compose, ctx);
-    await vi.advanceTimersByTimeAsync(500);
-    expect((await result).attached).toEqual(['/tmp/photo.png']);
-    expect(ctx.helper.call).toHaveBeenCalledWith('ax.tree', expect.objectContaining({ scope: 'window' }), expect.anything());
-  });
-
-  it('keeps the existing three-second fallback for older helpers without page metadata', async () => {
-    vi.useFakeTimers();
-    const result = gmailCompose.run(compose, gmailContext({ oldHelper: true }));
-    await vi.advanceTimersByTimeAsync(3_000);
-    expect((await result).attached).toEqual(['/tmp/photo.png']);
-    expect(vi.getTimerCount()).toBe(0);
-  });
-
-  it('stops immediately on a failed upload and leaves the draft unsent', async () => {
-    vi.useFakeTimers();
-    const ctx = gmailContext({ failUpload: true });
-    await expect(gmailCompose.run(compose, ctx)).rejects.toMatchObject({ code: 'upload_unverified' });
-    expect(ctx.helper.call).not.toHaveBeenCalledWith('keyboard.press', { key: 'return', modifiers: ['command'] }, expect.anything());
-  });
-
+describe('Gmail send readiness without screen capture', () => {
   it('checks the exact draft and confirms sending with AX when screen capture is unavailable', async () => {
     const ctx = gmailContext();
     const result = await gmailSend.run({ to: 'me@example.com', subject: 'Photo', body: '' }, ctx);

@@ -3,8 +3,8 @@ import type { AxElement } from '@commandos/contracts';
 import { z } from 'zod';
 import { PathArg } from './fs';
 import { runOsaTemplate } from './osa';
-import { resolveUserPath } from './paths';
-import { delay, pollUntil } from './poll';
+import { attachGmailImages } from './gmail-attachment';
+import { pollUntil } from './poll';
 import { defineTool, type ToolContext, ToolError } from './types';
 
 /**
@@ -54,19 +54,6 @@ async function chromePage(ctx: ToolContext) {
   }
 }
 
-/** Count Gmail's removable attachment controls, which are often exposed even when
- * Chrome omits inline pasted images from AXWebArea's image count. */
-async function gmailAttachmentCount(ctx: ToolContext): Promise<number | null> {
-  try {
-    const tree = await ctx.helper.call('ax.tree', { bundleId: CHROME, scope: 'window', maxDepth: 40, maxNodes: 12_000 }, { signal: ctx.signal, timeoutMs: 1_500 });
-    if (tree.truncated) return null;
-    return tree.elements.filter((e) => /^(?:remove|delete) attachment\b/i.test(cleanText([e.title, e.label, e.description, e.identifier].filter(Boolean).join(' ')))).length;
-  } catch {
-    ctx.signal.throwIfAborted();
-    return null;
-  }
-}
-
 async function chromeWindowTitles(ctx: ToolContext): Promise<string[]> {
   const r = await ctx.helper.call('ax.find', { bundleId: CHROME, query: { role: 'AXWindow' }, maxResults: 30, maxDepth: 2 }, { signal: ctx.signal });
   return r.elements.flatMap((e) => (e.title ? [e.title] : []));
@@ -87,62 +74,6 @@ async function chromeWindowText(ctx: ToolContext, name: string, timeoutMs = 15_0
 
 /** The same, as optional evidence: null when the screen cannot be read quickly (no permission, macOS prompt pending). */
 const chromeWindowTextIfReadable = (ctx: ToolContext, name: string) => chromeWindowText(ctx, name, 4_000).catch(() => null);
-
-/** Puts each image into the open draft's message: clipboard, a click in the message area, ⌘V. */
-async function pasteImages(ctx: ToolContext, paths: string[]): Promise<string[]> {
-  const attached: string[] = [];
-  for (const raw of paths) {
-    const path = resolveUserPath(raw);
-    if (!/\.(jpe?g|png|gif|tiff?)$/i.test(path)) throw new ToolError('unsupported_attachment', `Only images can be attached for now (${basename(path)}).`);
-    const before = await chromePage(ctx);
-    const beforeAttachmentCount = await gmailAttachmentCount(ctx);
-    await runOsaTemplate(ctx.helper, 'clipboard.setImage', { path }, ctx.signal);
-    const windows = await ctx.helper.call('ax.find', { bundleId: CHROME, query: { role: 'AXWindow' }, maxResults: 30, maxDepth: 2 }, { signal: ctx.signal });
-    const frame = windows.elements.find((e) => /\bcompose\b/i.test(e.title ?? ''))?.frame ?? windows.elements[0]?.frame;
-    if (!frame) throw new ToolError('not_found', 'The Gmail draft window is not open in Chrome.');
-    await ctx.helper.call('apps.activate', { bundleId: CHROME }, { signal: ctx.signal });
-    // the full-page draft's message area fills the middle of the window, below To and Subject
-    await ctx.helper.call('mouse.click', { x: frame.x + frame.width * 0.5, y: frame.y + frame.height * 0.6, button: 'left', clicks: 1 }, { signal: ctx.signal });
-    await ctx.helper.call('keyboard.press', { key: 'v', modifiers: ['command'] }, { signal: ctx.signal });
-    ctx.progress(`Pasted ${basename(path)} into the draft`);
-    if (before?.images !== undefined && !before.truncated) {
-      let readySince = 0;
-      const uploaded = await pollUntil(
-        async () => {
-          const p = await chromePage(ctx);
-          if (p && /\b(?:upload failed|couldn[’']t upload|failed to attach)\b/i.test(p.text)) throw new ToolError('upload_unverified', `Gmail could not upload ${basename(path)}`);
-          const pageSettled =
-            p &&
-            !p.truncated &&
-            p.busy === false &&
-            !p.progressIndicators &&
-            !/\b(?:uploading|attaching)\b/i.test(p.text);
-          const imageEvidence = pageSettled && p.images !== undefined && p.images > (before.images as number);
-          const filenameEvidence = pageSettled && new RegExp(escapeRegExp(basename(path)), 'i').test(p.text);
-          const controlCount = pageSettled ? await gmailAttachmentCount(ctx) : null;
-          const controlEvidence = controlCount !== null && beforeAttachmentCount !== null && controlCount > beforeAttachmentCount;
-          const ready = imageEvidence || filenameEvidence || controlEvidence;
-          if (!ready) {
-            readySince = 0;
-            return null;
-          }
-          readySince ||= Date.now();
-          return Date.now() - readySince >= 300 ? true : null;
-        },
-        15_000,
-        ctx.signal,
-        100,
-        false,
-      );
-      if (!uploaded) throw new ToolError('upload_unverified', `Could not confirm Gmail finished attaching ${basename(path)}; the draft was left open.`);
-    } else {
-      // An older helper cannot report upload state: preserve the existing conservative fallback.
-      await delay(3_000, ctx.signal);
-    }
-    attached.push(path);
-  }
-  return attached;
-}
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -232,7 +163,7 @@ export const gmailCompose = defineTool({
   id: 'gmail.compose',
   title: 'Open a Gmail draft',
   description:
-    'Open a Gmail draft in Google Chrome with recipient, subject and body filled in, using the Gmail account signed in there. Nothing is sent. Use to "me" when the user emails themself. attachments: image files (e.g. a photo path bound from photobooth_takePhoto) are pasted into the message; other file types are not supported, so for those finish with needs_user. Follow with gmail_send to send it. Never drive Gmail’s web page with ui_* tools.',
+    'Open a Gmail draft in Google Chrome with recipient, subject and body filled in, using the Gmail account signed in there. Nothing is sent. Use to "me" when the user emails themself. attachments: image files (e.g. a photo path bound from photobooth_takePhoto) are attached through Gmail’s native file picker and verified before sending; other file types are not supported, so for those finish with needs_user. Follow with gmail_send to send it. Never drive Gmail’s web page with ui_* tools.',
   tier: 2,
   args: z.object({
     to: z.string().min(1).max(320),
@@ -284,7 +215,7 @@ export const gmailCompose = defineTool({
       if (!seen) throw new ToolError('not_opened', 'Gmail did not show a draft in Chrome (are you signed in to Gmail there?)');
       title = seen;
     }
-    const attached = a.attachments.length ? await pasteImages(ctx, a.attachments) : [];
+    const attached = a.attachments.length ? await attachGmailImages(ctx, a.attachments, () => chromePage(ctx)) : [];
     return { to, subject: a.subject, body: a.body, account: gmailAccountFromTitle(title) ?? account, windowTitle: title, attached };
   },
   summarize: (o) => ({ to: o.to, subject: o.subject, account: o.account, windowTitle: o.windowTitle, attached: o.attached.map((p) => basename(p)) }),
