@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { resolveUserPath } from './paths';
 import { delay, pollUntil } from './poll';
 import { defineTool, type ToolContext, ToolError } from './types';
+import { HelperCallError } from './helper/client';
 
 const PHOTO_BOOTH = 'com.apple.PhotoBooth';
 const LIBRARY = '~/Pictures/Photo Booth Library/Pictures';
@@ -13,6 +14,16 @@ const labels = (e: AxElement) => [e.title, e.label, e.description].filter((s): s
 async function requirePhotoBoothFocus(ctx: ToolContext) {
   const current = await ctx.helper.call('apps.frontmost', {}, { signal: ctx.signal });
   if (current.app?.bundleId !== PHOTO_BOOTH) throw new ToolError('not_frontmost', 'Photo Booth lost keyboard focus. No capture was started.');
+}
+
+async function activatePhotoBooth(ctx: ToolContext) {
+  const activation = await ctx.helper.call('apps.activate', { bundleId: PHOTO_BOOTH }, { signal: ctx.signal });
+  if (!activation.activated) throw new ToolError('not_frontmost', 'Photo Booth did not come to the front. Bring it forward before taking a picture.');
+  const frontmost = await pollUntil(async () => {
+    const current = await ctx.helper.call('apps.frontmost', {}, { signal: ctx.signal });
+    return current.app?.bundleId === PHOTO_BOOTH ? true : null;
+  }, 2_000, ctx.signal, 100);
+  if (!frontmost) throw new ToolError('not_frontmost', 'Photo Booth is not the frontmost app. Bring its window forward, then try again.');
 }
 
 function photos(dir: string): Array<{ name: string; mtime: number }> {
@@ -47,18 +58,32 @@ export const photoBoothTakePhoto = defineTool({
     const dir = resolveUserPath(LIBRARY);
     const before = new Set(photos(dir).map((p) => p.name));
     await ctx.helper.call('apps.launch', { bundleId: PHOTO_BOOTH, activate: true }, { signal: ctx.signal, timeoutMs: 20_000 });
-    const activation = await ctx.helper.call('apps.activate', { bundleId: PHOTO_BOOTH }, { signal: ctx.signal });
-    if (!activation.activated) throw new ToolError('not_frontmost', 'Photo Booth did not come to the front. Bring it forward before taking a picture.');
-    const frontmost = await pollUntil(async () => {
-      const current = await ctx.helper.call('apps.frontmost', {}, { signal: ctx.signal });
-      return current.app?.bundleId === PHOTO_BOOTH ? true : null;
-    }, 2_000, ctx.signal, 100);
-    if (!frontmost) throw new ToolError('not_frontmost', 'Photo Booth is not the frontmost app. Bring its window forward, then try again.');
+    await activatePhotoBooth(ctx);
     ctx.progress('Waiting for Photo Booth’s still-photo shutter to become ready');
     let resumed = false;
+    let reopened = false;
+    let missingWindow = false;
     const shutter = await pollUntil(async () => {
       await requirePhotoBoothFocus(ctx);
-      const tree = await ctx.helper.call('ax.tree', { bundleId: PHOTO_BOOTH, scope: 'window', maxDepth: 15, maxNodes: 1000 }, { signal: ctx.signal });
+      const tree = await ctx.helper.call('ax.tree', { bundleId: PHOTO_BOOTH, scope: 'window', maxDepth: 15, maxNodes: 1000 }, { signal: ctx.signal }).catch(async (error: unknown) => {
+        ctx.signal.throwIfAborted();
+        // App activation can finish before its window is exposed to Accessibility.
+        // Reopen the installed app once to restore a closed camera window, then
+        // poll its real controls. Permission errors must still fail immediately.
+        if (!(error instanceof HelperCallError) || error.code !== 'not_found') throw error;
+        missingWindow = true;
+        if (!reopened) {
+          reopened = true;
+          ctx.progress('Reopening Photo Booth’s camera window');
+          const app = await ctx.helper.call('apps.info', { bundleId: PHOTO_BOOTH }, { signal: ctx.signal });
+          const opened = await ctx.helper.call('workspace.open', { path: app.path }, { signal: ctx.signal });
+          if (!opened.opened) throw new ToolError('page_not_ready', 'Photo Booth’s camera window could not be reopened. No capture was started.');
+          await activatePhotoBooth(ctx);
+        }
+        return null;
+      });
+      if (!tree) return null;
+      missingWindow = false;
       if (tree.truncated) throw new ToolError('page_not_ready', 'Photo Booth’s capture controls could not be read completely. No capture was started.');
       const mode = tree.elements.filter((e) => e.role === 'AXRadioButton' && labels(e).includes('picture'));
       if (mode.length !== 1) return null;
@@ -83,7 +108,9 @@ export const photoBoothTakePhoto = defineTool({
       }
       return null;
     }, 8_000, ctx.signal, 150, false);
-    if (!shutter) throw new ToolError('page_not_ready', 'Photo Booth’s shutter stayed disabled. Resume its preview and make sure the camera is available; no capture was started.');
+    if (!shutter) throw new ToolError('page_not_ready', missingWindow
+      ? 'Photo Booth’s camera window did not become accessible. Open Window → Photo Booth and try again; no capture was started.'
+      : 'Photo Booth’s shutter stayed disabled. Resume its preview and make sure the camera is available; no capture was started.');
     await requirePhotoBoothFocus(ctx);
     const shutterLabel = labels(shutter).find((s) => /^(?:take photo|take (?:a )?picture)$/.test(s))!;
     ctx.progress('Clicking Photo Booth’s shutter once');

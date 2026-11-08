@@ -119,7 +119,7 @@ export const uiPress = defineTool({
   risk: (a): RiskLevel => (RISKY_LABEL.test(a.expectLabel) ? 'high' : 'low'),
   idempotent: false,
   defaultTimeoutMs: 30_000,
-  resources: (a) => [`app:${a.bundleId}`],
+  resources: (a) => [`app:${a.bundleId}`, 'ui:frontmost'],
   preview: (a) => ({ summary: `Press “${a.expectLabel}” in ${a.bundleId}`, details: [] }),
   alternatives(a, error) {
     // a stale element ref: look the element up again by its label

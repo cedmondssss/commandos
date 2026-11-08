@@ -2,6 +2,7 @@ import { defaultSettings } from '@commandos/contracts';
 import { readdirSync, statSync } from 'node:fs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { photoBoothTakePhoto } from '../src/camera';
+import { HelperCallError } from '../src/helper/client';
 import type { ToolContext } from '../src/types';
 
 vi.mock('node:fs', async (load) => {
@@ -9,19 +10,28 @@ vi.mock('node:fs', async (load) => {
   return { ...actual, existsSync: vi.fn(() => true), readdirSync: vi.fn(() => []), statSync: vi.fn() };
 });
 
-function harness(options: { activated?: boolean; frontmost?: string; disabled?: boolean; resumes?: boolean; videoMode?: boolean; noSavedPhoto?: boolean; clickAckLost?: boolean } = {}) {
+function harness(options: { activated?: boolean; frontmost?: string; disabled?: boolean; resumes?: boolean; videoMode?: boolean; noSavedPhoto?: boolean; clickAckLost?: boolean; windowDelay?: number; closedWindow?: boolean; missingWindow?: boolean; treeDenied?: boolean } = {}) {
   let ready = !options.disabled;
   let picture = !options.videoMode;
+  let windowReads = 0;
+  let reopened = false;
   const call = vi.fn(async (method: string, params: Record<string, unknown>) => {
     if (method === 'apps.info') return { bundleId: 'com.apple.PhotoBooth', name: 'Photo Booth', version: '', shortVersion: '', path: '/Applications/Photo Booth.app', running: true, pids: [123] };
     if (method === 'apps.launch') return { pid: 123, bundleId: 'com.apple.PhotoBooth' };
     if (method === 'apps.activate') return { activated: options.activated ?? true };
+    if (method === 'workspace.open') { reopened = true; return { opened: true }; }
     if (method === 'apps.frontmost') return { app: { bundleId: options.frontmost ?? 'com.apple.PhotoBooth', name: 'Photo Booth', pid: 123, active: true, hidden: false } };
-    if (method === 'ax.tree') return { truncated: false, elements: [
+    if (method === 'ax.tree') {
+      if (options.treeDenied) throw new HelperCallError('ax.tree', 'permission_denied', 'Accessibility permission is not granted');
+      if (options.missingWindow || (options.closedWindow && !reopened) || windowReads++ < (options.windowDelay ?? 0)) {
+        throw new HelperCallError('ax.tree', 'not_found', 'com.apple.PhotoBooth has no accessible front window');
+      }
+      return { truncated: false, elements: [
       { ref: '123:0.0', role: 'AXRadioButton', description: 'picture', value: picture ? '1' : '0', enabled: true },
       { ref: '123:0.1', role: 'AXButton', description: 'take photo', enabled: ready },
       { ref: '123:0.2', role: 'AXImage', description: 'preview', frame: { x: 100, y: 100, width: 600, height: 400 } },
-    ] };
+      ] };
+    }
     if (method === 'mouse.click' && options.resumes) ready = true;
     if (method === 'ax.press' && params.ref === '123:0.0') picture = true;
     // The real failure: AXPress returns success but never fires the custom shutter.
@@ -66,6 +76,34 @@ describe('Photo Booth capture focus guard', () => {
     await rejected;
     expect(h.call.mock.calls.filter(([method]) => method === 'mouse.click')).toHaveLength(1);
     expect(h.call.mock.calls.some(([method]) => method === 'ax.press' || method === 'ax.click' || method === 'keyboard.press')).toBe(false);
+  });
+
+  it.each([{ windowDelay: 3 }, { closedWindow: true }])('waits for and reopens a missing camera window before capturing once: %j', async (options) => {
+    const h = harness(options);
+    const result = photoBoothTakePhoto.run({}, h.context);
+    // Handle rejection immediately while the fake clock advances.
+    const finished = result.then((value) => ({ value }), (error: unknown) => ({ error }));
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(await finished).toMatchObject({ value: { name: expect.stringContaining('9.44\u202fPM.jpg') } });
+    expect(h.call.mock.calls.filter(([method]) => method === 'workspace.open')).toHaveLength(1);
+    expect(h.call).toHaveBeenCalledWith('workspace.open', { path: '/Applications/Photo Booth.app' }, expect.anything());
+    expect(h.call.mock.calls.filter(([method]) => method === 'ax.click')).toHaveLength(1);
+    expect(h.call.mock.calls.some(([method]) => method === 'keyboard.press')).toBe(false);
+  });
+
+  it('gives a bounded window-readiness error without taking a photo when no window appears', async () => {
+    const h = harness({ missingWindow: true });
+    const finished = photoBoothTakePhoto.run({}, h.context).then((value) => ({ value }), (error: unknown) => ({ error }));
+    await vi.advanceTimersByTimeAsync(9_000);
+    expect(await finished).toMatchObject({ error: { code: 'page_not_ready', message: expect.stringContaining('camera window') } });
+    expect(h.call.mock.calls.filter(([method]) => method === 'workspace.open')).toHaveLength(1);
+    expect(h.call.mock.calls.some(([method]) => ['ax.click', 'ax.press', 'mouse.click', 'keyboard.press'].includes(method))).toBe(false);
+  });
+
+  it('surfaces an Accessibility denial without trying to reopen or capture', async () => {
+    const h = harness({ treeDenied: true });
+    await expect(photoBoothTakePhoto.run({}, h.context)).rejects.toMatchObject({ code: 'permission_denied' });
+    expect(h.call.mock.calls.some(([method]) => ['workspace.open', 'ax.click', 'keyboard.press'].includes(method))).toBe(false);
   });
 
   it.each([{ noSavedPhoto: true }, { clickAckLost: true }])('never repeats an uncertain capture: %j', async (options) => {

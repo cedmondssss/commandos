@@ -65,7 +65,7 @@ export const appsLaunch = defineTool({
   risk: 'low',
   idempotent: true,
   defaultTimeoutMs: 20_000,
-  resources: (a) => [`app:${a.bundleId}`],
+  resources: (a) => [`app:${a.bundleId}`, ...(a.activate ? ['ui:frontmost'] : [])],
   preview: (a) => ({ summary: `Open ${a.bundleId}`, details: [] }),
   async run(a, ctx) {
     return ctx.helper.call('apps.launch', { bundleId: a.bundleId, activate: a.activate }, { signal: ctx.signal, timeoutMs: 20_000 });
@@ -88,7 +88,7 @@ export const appsActivate = defineTool({
   risk: 'low',
   idempotent: true,
   defaultTimeoutMs: 5_000,
-  resources: () => ['ui:frontmost'],
+  resources: (a) => [`app:${a.bundleId}`, 'ui:frontmost'],
   async run(a, ctx) {
     const r = await ctx.helper.call('apps.activate', { bundleId: a.bundleId }, { signal: ctx.signal });
     if (!r.activated) throw new ToolError('not_activated', `${a.bundleId} could not be activated`, true);
@@ -108,7 +108,7 @@ export const appsQuit = defineTool({
   risk: (a) => (a.force ? 'high' : 'medium'),
   idempotent: true,
   defaultTimeoutMs: 10_000,
-  resources: (a) => [`app:${a.bundleId}`],
+  resources: (a) => [`app:${a.bundleId}`, 'ui:frontmost'],
   preview: (a) => ({ summary: `${a.force ? 'Force quit' : 'Quit'} ${a.bundleId}`, details: ['Unsaved changes in that app may be lost.'] }),
   async run(a, ctx) {
     return ctx.helper.call('apps.quit', { bundleId: a.bundleId, force: a.force }, { signal: ctx.signal });
@@ -129,6 +129,7 @@ export const workspaceOpen = defineTool({
   risk: 'low',
   idempotent: true,
   defaultTimeoutMs: 10_000,
+  resources: (a) => ['ui:frontmost', ...(a.bundleId ? [`app:${a.bundleId}`] : [])],
   paths: (a) => ({ read: a.path ? [a.path] : [], write: [] }),
   preview: (a) => ({ summary: a.path ? `Open ${displayPath(resolveUserPath(a.path))}` : `Open ${a.url}`, details: [] }),
   async run(a, ctx) {
@@ -154,6 +155,7 @@ export const workspaceReveal = defineTool({
   risk: 'none',
   idempotent: true,
   defaultTimeoutMs: 10_000,
+  resources: () => ['ui:frontmost', 'app:com.apple.finder'],
   paths: (a) => ({ read: a.paths, write: [] }),
   async run(a, ctx) {
     return ctx.helper.call('workspace.reveal', { paths: a.paths.map(resolveUserPath) }, { signal: ctx.signal });
